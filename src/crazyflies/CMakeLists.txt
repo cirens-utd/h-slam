@@ -15,6 +15,8 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
 )
 
+catkin_python_setup()
+
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 
@@ -163,9 +165,9 @@ catkin_install_python(PROGRAMS
 )
 
 ## Install the Python package so modules and generated message/service code are available at runtime
-install(DIRECTORY src/crazyflies
-  DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
-)
+# install(DIRECTORY src/crazyflies
+#   DESTINATION ${CATKIN_PACKAGE_PYTHON_DESTINATION}
+# )
 
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
