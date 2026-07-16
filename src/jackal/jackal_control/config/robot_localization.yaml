@@ -1,0 +1,35 @@
+#Configuation for robot odometry EKF
+#
+frequency: 50
+
+
+# wheel encoders (the source of the odom) are only good for 
+# position, forwards (x) velocity, and yaw.
+odom0: /jackal_velocity_controller/odom
+odom0_config: [true, true, false,     #x, y, z
+               false, false, true,   #roll, pitch, yaw
+               true, false, false,    #vx, vy, vz
+               false, false, true,    #vroll, vpitch, vyaw
+               false, false, false]   #ax, ay, az
+odom0_differential: false
+
+
+# imu in 2d mode, imu only gives yaw velocity,
+# and linear acceleration because thats the
+# only way the robot can really move.
+
+imu0: /imu/data
+imu0_config: [false, false, false,
+              false, false, false,
+              false, false, false,
+              false, false, true,
+              true, false, false]
+imu0_differential: false
+
+odom_frame: odom
+base_link_frame: base_link
+world_frame: odom
+
+predict_to_current_time: true
+
+two_d_mode: true

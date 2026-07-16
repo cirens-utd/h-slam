@@ -1,0 +1,9 @@
+<launch>
+
+  <include file="$(find jackal_control)/launch/control.launch" />
+  <include file="$(find semantic_slam)/launch/slam.launch" />
+  <include file="$(find jackal_2dnav)/launch/move_base.launch" />
+  <include file="$(find semantic_slam)/launch/semantic_mapping.launch" />
+  <node pkg="tf" type="static_transform_publisher" name="lidar_tf_publisher" args="0 0 0 0 0 0 os_sensor os_lidar 100" />
+
+</launch>

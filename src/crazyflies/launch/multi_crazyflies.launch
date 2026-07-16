@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Four separate static transforms from base_link into each crazyflie pod frame -->
+  <arg name="base_frame" default="base_link"/>
+
+  <arg name="pod1_frame" default="crazyflie_pod_1_base"/>
+  <arg name="pod2_frame" default="crazyflie_pod_2_base"/>
+  <arg name="pod3_frame" default="crazyflie_pod_3_base"/>
+  <arg name="pod4_frame" default="crazyflie_pod_4_base"/>
+
+  <arg name="pod1_x" default="0.58"/>
+  <arg name="pod1_y" default="0.58"/>
+  <arg name="pod1_z" default="0.0"/>
+  <arg name="pod2_x" default="0.58"/>
+  <arg name="pod2_y" default="-0.58"/>
+  <arg name="pod2_z" default="0.0"/>
+  <arg name="pod3_x" default="-0.58"/>
+  <arg name="pod3_y" default="0.58"/>
+  <arg name="pod3_z" default="0.0"/>
+  <arg name="pod4_x" default="-0.58"/>
+  <arg name="pod4_y" default="-0.58"/>
+  <arg name="pod4_z" default="0.0"/>
+
+  <arg name="crazyflie_uri_1" default="radio://0/100/2M/E7E7E7E71D"/>
+  <arg name="crazyflie_uri_2" default="radio://0/110/2M/E7E7E7E721"/>
+  <arg name="crazyflie_uri_3" default="radio://0/120/2M/E7E7E7E702"/>
+  <arg name="crazyflie_uri_4" default="radio://0/100/2M/E7E7E7E714"/>
+  <arg name="namespace_1" default="cf1"/>
+  <arg name="namespace_2" default="cf2"/>
+  <arg name="namespace_3" default="cf3"/>
+  <arg name="namespace_4" default="cf4"/>
+
+  <node pkg="tf" type="static_transform_publisher" name="base_to_pod1_static"
+        args="$(arg pod1_x) $(arg pod1_y) $(arg pod1_z) 0 0 0 $(arg base_frame) $(arg pod1_frame) 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_to_pod2_static"
+        args="$(arg pod2_x) $(arg pod2_y) $(arg pod2_z) 0 0 0 $(arg base_frame) $(arg pod2_frame) 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_to_pod3_static"
+        args="$(arg pod3_x) $(arg pod3_y) $(arg pod3_z) 0 0 0 $(arg base_frame) $(arg pod3_frame) 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_to_pod4_static"
+        args="$(arg pod4_x) $(arg pod4_y) $(arg pod4_z) 0 0 0 $(arg base_frame) $(arg pod4_frame) 100"/>
+
+  <node pkg="crazyflies" type="radio_bridge" name="radio_bridge" output="screen">
+    <!-- <rosparam param="uris" subst_value="true">{"$(arg namespace_1)": "$(arg crazyflie_uri_1)", "$(arg namespace_2)": "$(arg crazyflie_uri_2)", "$(arg namespace_3)": "$(arg crazyflie_uri_3)", "$(arg namespace_4)": "$(arg crazyflie_uri_4)"}</rosparam> -->
+    <!-- <rosparam param="uris" subst_value="true">{"$(arg namespace_1)": "$(arg crazyflie_uri_1)", "$(arg namespace_2)": "$(arg crazyflie_uri_2)", "$(arg namespace_3)": "$(arg crazyflie_uri_3)"}</rosparam> -->
+    <!-- <rosparam param="uris" subst_value="true">{"$(arg namespace_1)": "$(arg crazyflie_uri_1)", "$(arg namespace_2)": "$(arg crazyflie_uri_2)"}</rosparam> -->
+    <rosparam param="uris" subst_value="true">{"$(arg namespace_1)": "$(arg crazyflie_uri_1)"}</rosparam>
+  </node>
+
+  <node pkg="crazyflies" type="crazyflie_manager" name="crazyflie_manager_1" output="screen">
+    <param name="base_frame" value="$(arg pod1_frame)"/>
+    <param name="crazyflie_uri" value="$(arg crazyflie_uri_1)"/>
+    <param name="namespace" value="$(arg namespace_1)"/>
+  </node>
+
+  <!-- <node pkg="crazyflies" type="crazyflie_manager" name="crazyflie_manager_2" output="screen">
+    <param name="base_frame" value="$(arg pod2_frame)"/>
+    <param name="crazyflie_uri" value="$(arg crazyflie_uri_2)"/>
+    <param name="namespace" value="$(arg namespace_2)"/>
+  </node> -->
+
+  <!-- <node pkg="crazyflies" type="crazyflie_manager" name="crazyflie_manager_3" output="screen">
+    <param name="base_frame" value="$(arg pod3_frame)"/>
+    <param name="crazyflie_uri" value="$(arg crazyflie_uri_3)"/>
+    <param name="namespace" value="$(arg namespace_3)"/>
+  </node> -->
+
+  <!-- <node pkg="crazyflies" type="crazyflie_manager" name="crazyflie_manager_4" output="screen">
+    <param name="base_frame" value="$(arg pod4_frame)"/>
+    <param name="crazyflie_uri" value="$(arg crazyflie_uri_4)"/>
+    <param name="namespace" value="$(arg namespace_4)"/>
+  </node> -->
+
+  <node pkg="crazyflies" type="crazyflie_planner" name="crazyflie_planner" output="screen">
+    <!-- <rosparam param="cf_namespaces" subst_value="true">["$(arg namespace_1)", "$(arg namespace_2)", "$(arg namespace_3)", "$(arg namespace_4)"]</rosparam> -->
+    <rosparam param="cf_namespaces" subst_value="true">["$(arg namespace_1)"]</rosparam>
+  </node>
+</launch>

@@ -1,0 +1,49 @@
+global_costmap:
+
+  # world? -> map now, see tf issue fix
+  global_frame: map
+  
+  # check this on Jackal tf
+  robot_base_frame: base_link
+  
+  # were 10 and 5
+  update_frequency: 20.0
+  publish_frequency: 10.0
+  
+  # new 
+  always_send_full_costmap: true
+  
+  map_type: costmap
+  width: 15
+  height: 15
+  origin_x: -7.5
+  origin_y: -7.5
+  
+  # new, was true
+  rolling_window: false
+  
+  # false since even though the map is from map_server it's on a topic and not already saved -> rtab says true?
+  static_map: false
+  
+  plugins:
+  # - {name: static,      type: "costmap_2d::StaticLayer"}
+  - {name: obstacles,   type: "costmap_2d::ObstacleLayer"}
+  - {name: inflation,   type: "costmap_2d::InflationLayer"}
+  - {name: terrain,     type: "terrain_layer_namespace::TerrainLayer"}
+  
+  obstacles:
+   
+    track_unknown_space: true
+    footprint_clearing_enabled: true
+    combination_method: 0 # 0 set to overwrite? laser overwrites any map that might be sent?
+    
+    # new, see http://wiki.ros.org/costmap_2d/Tutorials/Configuring%20Layered%20Costmaps -> doesn't help,doesn't clear shadows
+    observation_sources: pointcloud_sensor realsense_sensor # laser_scan_sensor
+    # laser_scan_sensor: {sensor_frame: front_laser, data_type: LaserScan, topic: front/scan, marking: true, clearing: true}
+    pointcloud_sensor: {sensor_frame: os_sensor, data_type: PointCloud2, topic: ouster/points, marking: true, clearing: true, min_obstacle_height: 0.0, obstacle_min_range: 0.2, raytrace_min_range: 0.2}
+    realsense_sensor: {sensor_frame: realsense_color_optical_frame, data_type: PointCloud2, topic: semantic_pcl/semantic_pcl, marking: true, clearing: false, observation_persistence: 0.5}
+    
+  terrain: 
+  
+    enabled: true
+    

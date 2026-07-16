@@ -1,0 +1,63 @@
+<launch>
+
+<!-- for real Jackal -->
+<remap from="/camera/depth_registered/image_raw" to="/realsense/depth/image_rect_raw" />
+<remap from="/camera/rgb/image_raw" to="/realsense/color/image_raw" />
+
+<rosparam file="$(find semantic_slam)/params/semantic_cloud.yaml" command="load"/>
+<param name="semantic_pcl/color_image_topic"
+           value="/realsense/color/image_raw"/>
+<param name="semantic_pcl/depth_image_topic"
+        value="/realsense/depth/image_rect_raw"/>
+<node pkg="semantic_cloud" type="semantic_cloud.py" name="semantic_cloud" output="log"/>
+
+<rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load"/>
+<node pkg="octomap_generator" type="octomap_generator" name="octomap_generator" output="log"/>
+
+<!--rviz-->
+<node pkg="rviz" type="rviz" name="ss_rviz" args="-d $(find semantic_slam)/semantic_mapping_nav.rviz"/>
+
+<!-- start octomap_server to publish an occupancy map -->
+<node pkg="octomap_server" type="octomap_server_node" name="octomap_server" output="log">
+
+              <param name="resolution" value="0.02" />
+              <param name="frame_id" type="string" value="map" />
+              
+              <param name="sensor_model/hit" value="0.7" />
+              <param name="sensor_model/miss" value="0.4" />
+              <param name="sensor_model/max_range" value="5.0" />
+              <!-- CHANGED FROM .03-->
+              <param name="pointcloud_min_z" value="0.3" />
+              <param name="occupancy_min_z" value="0.3" />
+              <!-- DIDN'T EXIST-->
+              <param name="filter_ground" value="false" />
+              <param name="base_frame_id" value="base_link" />
+              <!--param name="pointcloud_max_z" value="2.2" /-->
+              <param name="occupancy_max_z" value="1.5" />
+              
+              <remap from="cloud_in" to="/semantic_pcl/semantic_pcl" />                         
+</node>
+
+<!-- start depthimage_to_laserscan for use in navigation stack -->
+<!-- node pkg="depthimage_to_laserscan" type="depthimage_to_laserscan" name="depthimage_to_laserscan">
+
+              <param name="range_max" value="5.0" />
+              
+              <remap from="image" to="/camera/depth_registered/image_raw" />
+              <remap from="camera_info" to="/camera/depth_registered/camera_info" />
+</node-->
+
+<!-- run semantic_navigation -->
+<!--node pkg="jackal_2dnav" type="semantic_navigator" name="semantic_navigator" output="screen"/-->
+
+<!-- include file="$(find jackal_2dnav)/launch/move_base.launch"/>
+
+<include file="$(find explore_lite)/launch/explore.launch"/-->
+
+<!-- node pkg="map_server" type="map_saver" name="map_saver" args="-f $(find semantic_slam)/maps/occupancy_map">
+
+    <remap from="/map" to="/projected_map"/>
+
+</node -->
+
+</launch>

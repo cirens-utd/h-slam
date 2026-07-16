@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+import os
+import sys
+import time
+import math
+
+# adds ../src to path
+# SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# PACKAGE_SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'src'))
+# if PACKAGE_SRC_DIR not in sys.path:
+#     sys.path.insert(0, PACKAGE_SRC_DIR)
+
+import rospy
+import tf2_ros
+import tf.transformations as tft
+from geometry_msgs.msg import TransformStamped, PoseStamped
+import atexit
+import signal
+
+
+from crazyflies.crazyflie_controller import CrazyflieController
+from crazyflies.msg import Trajectory
+
+class CrazyflieManager(object):
+    def __init__(self):
+        self.map_frame = rospy.get_param('~map_frame', 'map')
+        # base_frame should be the frame of the drone pod. There should be four seperate pods with four seperate frames
+        # Publish these static transformation frames in a different file
+        self.base_frame = rospy.get_param('~base_frame', 'base_link')
+        self.lookup_timeout = rospy.get_param('~lookup_timeout', 5.0)
+        self.crazyflie_uri = rospy.get_param('~crazyflie_uri', 'radio://0/100/2M/E7E7E7E702')
+        self.namespace = rospy.get_param('~namespace', 'CF0')
+        self.controller = CrazyflieController(self.crazyflie_uri, debug=False, namespace=self.namespace)
+
+        
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        rospy.Subscriber(f'/{self.namespace}/goal', PoseStamped, self._goal_received)
+        rospy.Subscriber(f'/{self.namespace}/trajectory', Trajectory, self._trajectory_received)
+        self.crazyflie_tf = None
+        self.takeoff_tf = self._get_original_takeoff()
+
+        self.crazyflie_transform_publisher = tf2_ros.TransformBroadcaster()
+        self.timer = rospy.Timer(rospy.Duration(0.1), self._publish_crazyflie_transform)
+
+
+
+        # ensure controller is cleaned up on ROS shutdown, normal exit, and signals
+        rospy.on_shutdown(self._on_shutdown)
+        atexit.register(self._on_shutdown)
+        try:
+            signal.signal(signal.SIGTERM, lambda s, f: (rospy.loginfo('SIGTERM received'), self._on_shutdown(), sys.exit(0)))
+            signal.signal(signal.SIGINT, lambda s, f: (rospy.loginfo('SIGINT received'), self._on_shutdown(), sys.exit(0)))
+        except Exception:
+            pass
+    
+    # get the existing transform from the map frame to the pod/base frame from the tf tree
+    def _get_original_takeoff(self):
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                rospy.Time(0),
+                rospy.Duration(self.lookup_timeout),
+            )
+            self._log('loginfo', f'Using existing TF transform from {self.map_frame} to {self.base_frame}')
+            return tf_msg
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as exc:
+            self._log('logwarn', f'Could not find transform from {self.map_frame} to {self.base_frame}: {exc}')
+            self._log('logwarn', 'Falling back to identity transform')
+            return _make_transform(self.map_frame, self.base_frame)
+    
+    def _log(self, level, message, *args):
+        getattr(rospy, level)(f'[{self.namespace}] {message}', *args)
+
+    def _goal_received(self, msg):
+        self._log('loginfo', 'goal received')
+        if msg.header.frame_id != self.map_frame:
+            self._log('logwarn', f'Goal frame_id {msg.header.frame_id} does not match map_frame {self.map_frame}. Goal not parsed')
+            return
+        goal_pose = msg.pose
+
+
+        self._log('loginfo', f'goal position:\nx: {goal_pose.position.x}\ny: {goal_pose.position.y}\nz: {goal_pose.position.z}')
+    
+        self.launch()
+        time.sleep(1)
+        self.go_to_map(goal_pose)
+        time.sleep(1)
+        self.land()
+
+    def _trajectory_received(self, msg):
+        self._log('loginfo', 'trajectory received')
+        self.launch()
+        self.controller.execute_trajectory(msg)
+        self.land()
+
+    def launch(self):
+        if not self.controller:
+            self._log('logwarn', "WARNING: Controller does not exist. Exiting.")
+            return
+        if self.crazyflie_tf:
+            self.takeoff_tf = self.crazyflie_tf
+            self.takeoff_tf.child_frame_id = self.base_frame
+
+        self._log('loginfo', 'takeoff tf: ' + str(self.takeoff_tf))
+
+        self.controller.launch(velocity=0.75)
+
+    def land(self):
+        self.controller.land(velocity=0.2)
+        
+        # no longer needed, adjusting z to 0 in crazyflie controller 
+        # to prevent underlying positive z drift
+        # self.crazyflie_tf.transform.translation.z = 0
+    
+
+    def _on_shutdown(self):
+        self._log('loginfo', 'CrazyflieManager shutting down; cleaning up controller and timers')
+        try:
+            if hasattr(self, 'timer') and self.timer is not None:
+                try:
+                    self.timer.shutdown()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if self.controller:
+            try:
+                self._log('loginfo', 'Landing crazyflie before shutdown')
+                self.controller.land(velocity=0.2)
+            except Exception:
+                pass
+            try:
+                self.controller.shutdown()
+            except Exception:
+                pass
+            self.controller = None
+
+    # custom sleep function so that we can always keybaord interrupt
+    # and safely land the crazyflie if something goes wrong
+    # not currently used
+    def _interruptible_sleep(self, duration, check_period=0.1):
+        end_time = time.time() + duration
+        try:
+            while time.time() < end_time:
+                if rospy.is_shutdown():
+                    raise rospy.ROSInterruptException()
+                remaining = end_time - time.time()
+                time.sleep(min(check_period, remaining))
+        except KeyboardInterrupt:
+            self._log('loginfo', 'KeyboardInterrupt received during sleep')
+            raise
+
+    # compute and broadcast map -> crazyflie
+    # from takeoff position and current crazyflie position
+    def _publish_crazyflie_transform(self, event, child_frame_id=None):
+        if not self.controller:
+            return
+        if not child_frame_id:
+            child_frame_id = self.namespace
+        # get current crazyflie pose from the controller
+        cf_pose = self.controller.get_position_estimate()
+        cf_roll, cf_pitch, cf_yaw = map(math.radians, cf_pose[3:6])
+
+        # map -> takeoff_translation
+        # print("cf pose: "+str(cf_pose))
+        # print("takeoff tf: "+str(self.takeoff_tf))
+        t = self.takeoff_tf.transform.translation
+        q = self.takeoff_tf.transform.rotation
+        map_T_takeoff = tft.concatenate_matrices(
+            tft.translation_matrix((t.x, t.y, t.z)),
+            tft.quaternion_matrix((q.x, q.y, q.z, q.w)),
+        )
+
+        # takeoff -> crazyflie
+        takeoff_T_cf = tft.concatenate_matrices(
+            tft.translation_matrix((cf_pose[0], cf_pose[1], cf_pose[2])),
+            tft.euler_matrix(cf_roll, cf_pitch, cf_yaw),
+        )
+
+        # map -> crazyflie
+        map_T_cf = tft.concatenate_matrices(map_T_takeoff, takeoff_T_cf)
+        translation = tft.translation_from_matrix(map_T_cf)
+        quaternion = tft.quaternion_from_matrix(map_T_cf)
+
+        # build and publish transform
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = rospy.Time.now()
+        tf_msg.header.frame_id = self.takeoff_tf.header.frame_id
+        tf_msg.child_frame_id = child_frame_id
+        tf_msg.transform.translation.x = translation[0]
+        tf_msg.transform.translation.y = translation[1]
+        tf_msg.transform.translation.z = translation[2]
+        tf_msg.transform.rotation.x = quaternion[0]
+        tf_msg.transform.rotation.y = quaternion[1]
+        tf_msg.transform.rotation.z = quaternion[2]
+        tf_msg.transform.rotation.w = quaternion[3]
+
+        self.crazyflie_transform_publisher.sendTransform(tf_msg)
+        self.crazyflie_tf = tf_msg
+        # print("new tf: "+str(tf_msg))
+        return tf_msg
+
+    # move to position in map frame
+    def go_to_map(self, goal_pose):
+        if not self.controller:
+            self._log('logwarn', 'Crazyflie controller not initialized.')
+            return
+
+        dx, dy, dz, dyaw = self._translate_absolute_map_to_relative_crazyflie(goal_pose)
+
+        # move crazyflie to relative position
+        self._log('loginfo', f'Moving {dx} {dy} {dz} (yaw: {dyaw}) to reach absolute position {goal_pose.position.x} {goal_pose.position.y} {self.crazyflie_tf.transform.translation.z}')
+        self.controller.move(dx, dy, 0, yaw=dyaw)
+        # self.controller.move_arc(dx, dy, 0, yaw=dyaw)
+
+    # translate given pose in map frame to relative movement in crazyflie frame using tf
+    def _translate_absolute_map_to_relative_crazyflie(self, goal_pose):
+        if not self.crazyflie_tf:
+            self._log('logwarn', 'Crazyflie transform not available')
+            return 0, 0, 0, 0
+
+        # extract goal position and orientation
+        goal_x = goal_pose.position.x
+        goal_y = goal_pose.position.y
+        goal_z = goal_pose.position.z
+        goal_qx = goal_pose.orientation.x
+        goal_qy = goal_pose.orientation.y
+        goal_qz = goal_pose.orientation.z
+        goal_qw = goal_pose.orientation.w
+        goal_roll, goal_pitch, goal_yaw = tft.euler_from_quaternion([goal_qx, goal_qy, goal_qz, goal_qw])
+
+        # build map -> goal transform
+        map_T_goal = tft.concatenate_matrices(
+            tft.translation_matrix((goal_x, goal_y, goal_z)),
+            tft.euler_matrix(goal_roll, goal_pitch, goal_yaw),
+        )
+
+        # build map -> crazyflie transform from published tf
+        cf_t = self.crazyflie_tf.transform.translation
+        cf_q = self.crazyflie_tf.transform.rotation
+        map_T_cf = tft.concatenate_matrices(
+            tft.translation_matrix((cf_t.x, cf_t.y, cf_t.z)),
+            tft.quaternion_matrix((cf_q.x, cf_q.y, cf_q.z, cf_q.w)),
+        )
+
+        # compute crazyflie -> goal transform
+        cf_T_goal = tft.inverse_matrix(map_T_cf).dot(map_T_goal)
+        
+        # extract relative position and orientation
+        relative_pos = tft.translation_from_matrix(cf_T_goal)
+        relative_quat = tft.quaternion_from_matrix(cf_T_goal)
+        relative_roll, relative_pitch, relative_yaw = tft.euler_from_quaternion(relative_quat)
+
+        relative_roll_deg = math.degrees(relative_roll)
+        relative_pitch_deg = math.degrees(relative_pitch)
+        relative_yaw_deg = math.degrees(relative_yaw)
+
+        self._log('loginfo', f'Goal in map frame: ({goal_x}, {goal_y}, {goal_z})')
+        self._log('loginfo', f'Crazyflie in map frame: ({cf_t.x}, {cf_t.y}, {cf_t.z})')
+        self._log('loginfo', f'Relative movement in crazyflie frame: ({relative_pos[0]}, {relative_pos[1]}, {relative_pos[2]})')
+        self._log('loginfo', f'Relative orientation in crazyflie frame: roll={relative_roll_deg:.1f}°, pitch={relative_pitch_deg:.1f}°, yaw={relative_yaw_deg:.1f}°')
+
+        return relative_pos[0], relative_pos[1], relative_pos[2], relative_yaw_deg
+
+# create a transform from frame_id to child_frame_id
+def _make_transform(frame_id, child_frame_id, x=0.0, y=0.0, z=0.0, yaw=0.0):
+    
+    # create a default TransformStamped with translation and yaw rotation
+    tf = TransformStamped()
+    tf.header.frame_id = frame_id
+    tf.header.stamp = rospy.Time.now()
+    tf.child_frame_id = child_frame_id
+    tf.transform.translation.x = x
+    tf.transform.translation.y = y
+    tf.transform.translation.z = z
+
+    q = tft.quaternion_from_euler(0.0, 0.0, yaw)
+    tf.transform.rotation.x = q[0]
+    tf.transform.rotation.y = q[1]
+    tf.transform.rotation.z = q[2]
+    tf.transform.rotation.w = q[3]
+    return tf
+    
+def main():
+    rospy.init_node('crazyflie_manager')
+    CrazyflieManager()
+    rospy.spin()
+
+
+if __name__ == '__main__':
+    main()

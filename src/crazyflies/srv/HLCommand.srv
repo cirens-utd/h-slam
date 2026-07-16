@@ -1,0 +1,5 @@
+string command          # "takeoff", "land", "go_to"
+float32[] args          # arguments specific to the command
+---
+bool success
+string message

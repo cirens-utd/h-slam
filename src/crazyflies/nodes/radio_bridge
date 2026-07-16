@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+
+import signal
+import time
+import traceback
+
+import rospy
+import cflib.crtp
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.log import LogConfig
+from cflib.crazyflie.mem import MemoryElement, Poly4D as CFPoly4D
+
+from crazyflies.srv import HLCommand, HLCommandResponse
+from crazyflies.msg import StateEstimate
+class RadioBridge:
+    def __init__(self):
+        self.uris = rospy.get_param('~uris', {'cf1': 'radio://0/100/2M/E7E7E7E702'})
+        self.cfs = {}
+        self.state_pubs = {}
+        self.is_launched = {}
+
+        self._shutdown_in_progress = False
+        self._force_stop = False
+        rospy.on_shutdown(self.shutdown)
+        signal.signal(signal.SIGTERM, self._sigterm_handler)
+
+        rospy.loginfo(f"RadioBridge URIs: {self.uris}")
+        for ns, uri in self.uris.items():
+            cf = Crazyflie(rw_cache=f'./cache/{ns}')
+            scf = SyncCrazyflie(uri, cf=cf)
+            scf.open_link()
+            self.cfs[ns] = scf
+            
+            self.state_pubs[ns] = rospy.Publisher(f'/{ns}/state', StateEstimate, queue_size=10)
+
+            self.is_launched[ns] = False
+            rospy.Service(f'/{ns}/hl_command', HLCommand,
+                          lambda req, ns=ns: self.handle_command(ns, req))
+            
+            self.setup_state_logging(ns, scf)
+
+    def setup_state_logging(self, ns, scf):
+        cf = scf.cf
+        logconf = LogConfig(name=f'{ns}_state', period_in_ms=100)
+        logconf.add_variable('stateEstimate.x', 'float')
+        logconf.add_variable('stateEstimate.y', 'float')
+        logconf.add_variable('stateEstimate.z', 'float')
+        logconf.add_variable('stateEstimate.roll', 'float')
+        logconf.add_variable('stateEstimate.pitch', 'float')
+        logconf.add_variable('stateEstimate.yaw', 'float')
+
+        cf.log.add_config(logconf)
+        logconf.data_received_cb.add_callback(
+            lambda timestamp, data, logconf, ns=ns: self.on_state_data(ns, timestamp, data, logconf)
+        )
+        logconf.start()
+
+    def on_state_data(self, ns, timestamp, data, logconf):
+        msg = StateEstimate()
+        msg.stamp = rospy.Time.now()
+        msg.x = data['stateEstimate.x']
+        msg.y = data['stateEstimate.y']
+        msg.z = data['stateEstimate.z']
+        msg.roll = data['stateEstimate.roll']
+        msg.pitch = data['stateEstimate.pitch']
+        msg.yaw = data['stateEstimate.yaw']
+        self.state_pubs[ns].publish(msg)
+
+    def handle_command(self, ns, req):
+        hlc = self.cfs[ns].cf.high_level_commander
+        try:
+            if req.command == "takeoff":
+                # args: [height, duration]
+                hlc.takeoff(req.args[0], req.args[1])
+                self.is_launched[ns] = True
+            elif req.command == "land":
+                # args: [height, duration]
+                hlc.land(req.args[0], req.args[1], yaw=None)
+                self.is_launched[ns] = False
+            elif req.command == "go_to":
+                # args: [x, y, z, yaw, duration, relative(0/1)]
+                hlc.go_to(req.args[0], req.args[1], req.args[2], req.args[3], req.args[4], relative=bool(req.args[5]))
+            elif req.command == "reset_estimation":
+                self._reset_position_estimator(hlc)
+            elif req.command == "stop":
+                hlc.stop()
+            elif req.command == "shutdown":
+                self.shutdown()
+            elif req.command == "define_trajectory":
+                # args: [trajectory_id, cf_trajectory]
+                self.define_trajectory(int(req.args[0]), array_to_cflib_trajectory(req.args[1:]), ns)
+            elif req.command == "start_trajectory":
+                # args [trajectory_id, relative_position(0/1), relative_yaw(0/1)]
+                hlc.start_trajectory(int(req.args[0]), relative=bool(req.args[1]))
+            else:
+                return HLCommandResponse(success=False, message=f"Unknown command: {req.command}")
+            return HLCommandResponse(success=True, message="Command executed successfully")
+        except Exception as e:
+            return HLCommandResponse(success=False, message=traceback.format_exc())
+                
+    def _reset_position_estimator(self, hlc):
+        hlc._cf.param.set_value('kalman.resetEstimation', '1')
+        time.sleep(0.1)
+        hlc._cf.param.set_value('kalman.resetEstimation', '0')
+        time.sleep(2)
+
+    def _sigterm_handler(self, signum, frame):
+        rospy.logwarn("SIGTERM received, emergency stopping Crazyflies")
+        self._force_stop = True
+        self.shutdown()
+
+    def define_trajectory(self, trajectory_id, cf_trajectory, ns):
+        cf = self.cfs[ns].cf
+        trajectory_mem = cf.mem.get_mems(MemoryElement.TYPE_TRAJ)[0]
+        trajectory_mem.trajectory = cf_trajectory
+ 
+        if not trajectory_mem.write_data_sync():
+            rospy.logerr('Trajectory upload failed, aborting')
+            return
+ 
+        commander = cf.high_level_commander
+        commander.define_trajectory(trajectory_id, 0, len(cf_trajectory))
+
+    def shutdown(self):
+        if self._shutdown_in_progress:
+            return
+
+        self._shutdown_in_progress = True
+
+        rospy.loginfo("Shutting down radio bridge")
+
+        if self._force_stop:
+            rospy.logwarn("Emergency shutdown: stopping all Crazyflies")
+
+            for ns, scf in list(self.cfs.items()):
+                try:
+                    hlc = scf.cf.high_level_commander
+                    if hlc is not None:
+                        hlc.stop()
+                except Exception as e:
+                    rospy.logwarn("%s stop failed: %s", ns, e)
+
+        else:
+            rospy.loginfo("Landing all Crazyflies")
+
+            # Send land command to all vehicles first
+            for ns, scf in list(self.cfs.items()):
+                try:
+                    hlc = scf.cf.high_level_commander
+                    if hlc is not None and self.is_launched[ns]:
+                        hlc.stop()  # Stop any ongoing commands before landing
+                        time.sleep(0.1)
+                        hlc.land(0.0, 3.0)  # descend to z=0 over 3 seconds
+                except Exception as e:
+                    rospy.logwarn("%s land failed: %s", ns, e)
+
+            # Give them time to complete the landing
+            rospy.sleep(3.5)
+
+            # Stop the commander after landing
+            for ns, scf in list(self.cfs.items()):
+                try:
+                    hlc = scf.cf.high_level_commander
+                    if hlc is not None:
+                        hlc.stop()
+                except Exception:
+                    pass
+
+        # Close radio links
+        for ns, scf in list(self.cfs.items()):
+            try:
+                scf.close_link()
+            except Exception as e:
+                rospy.logwarn("%s close_link failed: %s", ns, e)
+
+        self.cfs.clear()
+        self.state_pubs.clear()
+
+        rospy.loginfo("Radio bridge shutdown complete")
+
+FLOATS_PER_PIECE = 33  # 1 duration + 4 axes * 8 coefficients
+
+def array_to_cflib_trajectory(array):
+    """
+    array: flat list/array of floats produced by trajectory_msg_to_array
+           (length must be a multiple of 33)
+    Returns: a list of cflib.crazyflie.mem.Poly4D objects, ready to assign
+             to trajectory_mem.trajectory before write_data_sync().
+    """
+    if len(array) % FLOATS_PER_PIECE != 0:
+        raise ValueError(
+            f'Array length {len(array)} is not a multiple of '
+            f'{FLOATS_PER_PIECE} (1 duration + 4x8 coefficients per piece)')
+ 
+    trajectory = []
+    for start in range(0, len(array), FLOATS_PER_PIECE):
+        duration = array[start]
+        x = list(array[start + 1: start + 9])
+        y = list(array[start + 9: start + 17])
+        z = list(array[start + 17: start + 25])
+        yaw = list(array[start + 25: start + 33])
+        trajectory.append(CFPoly4D(duration, _as_poly(x), _as_poly(y), _as_poly(z), _as_poly(yaw)))
+ 
+    return trajectory
+
+
+def _as_poly(coeffs):
+    """
+    Wrap a list of 8 coefficients in cflib's Poly4D.Poly, which is what
+    Poly4D.x / .y / .z / .yaw actually need to be (each must expose a
+    `.values` attribute -- a plain list is NOT accepted here, even though
+    it looks like it should be).
+    """
+    return CFPoly4D.Poly(list(coeffs))
+
+
+def main():
+    rospy.init_node('radio_bridge')
+    cflib.crtp.init_drivers()
+    bridge = RadioBridge()
+    rospy.spin()
+
+if __name__ == '__main__':
+    main()

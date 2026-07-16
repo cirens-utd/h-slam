@@ -1,0 +1,27 @@
+# Camera intrinsic matrix parameters (OpenCV)
+camera:
+  # for simulation
+  # fx: 462.138
+  # fy: 462.138
+  # cx: 320.0
+  # cy: 240.0
+  
+  # for real Jackal
+  fx: 593.07471394
+  fy: 594.69358394
+  cx: 317.01587114
+  cy: 246.48379517
+
+  width: 640
+  height: 480
+
+semantic_pcl:
+  color_image_topic: "/camera/rgb/image_raw"
+  depth_image_topic: "/camera/depth_registered/image_raw" # DO NOT CHANGE TOPIC NAMES, REMAP
+  point_type: 1
+  frame_id: "realsense_color_optical_frame" # /camera_rgb_optical_frame in simulation
+  dataset: "ade20k" # ade20k
+  # dataset: "sunrgbd" # sunrgbd
+  # model_path: "/home/conlab/ss_models/train_epoch_100.pth"
+  model_path: "/home/conlab/ss_models/pspnet_50_ade20k.pth"
+  # model_path: "/home/interns/xuan/models/pspnet_sunrgbd_best_model180625_5k.pth"

@@ -1,0 +1,13 @@
+<launch>
+
+  <!-- for real Jackal -->
+  <remap from="/camera/depth_registered/image_raw" to="/realsense/aligned_depth_to_color/image_raw" />
+  <remap from="/camera/rgb/image_raw" to="/realsense/color/image_raw" />
+  
+  <node pkg="tf" type="static_transform_publisher" name="env_map_broadcaster" args="0 0 0 0 0 0 1 env map 100" />
+  <node pkg="tf" type="static_transform_publisher" name="map_odom_broadcaster" args="0 0 0 0 0 0 1 map odom 100" />
+
+  <!-- ORB_SLAM2 RGBD -->
+  <node pkg="orb_slam2" type="rgbd" name="rgbd" output="screen" args="$(find orb_slam2)/../../../Vocabulary/ORBvoc.txt $(find semantic_slam)/params/d435i.yaml"/>
+  <remap from="/camera/rgb/image_raw" to="/my_camera/color/image_raw"/>
+</launch>

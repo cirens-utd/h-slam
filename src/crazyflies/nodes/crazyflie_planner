@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+# TODO: write a node that plans crazyflie paths
+# for now, just manually plan waypoints and send them to drones
+# eventually, use the define and start trajectory part of the high level commander api to get smooth routes
+# eventually, subscribe to jackal waypoints and send crazyflies to them
+
+import math
+import time
+import rospy
+from geometry_msgs.msg import PoseStamped
+from tf.transformations import quaternion_from_euler
+
+from crazyflies.compute_trajectory import waypoints_to_smooth_trajectory
+from crazyflies.msg import Trajectory, Poly4D
+
+class CrazyfliePlanner:
+    def __init__(self):
+        self.cf_namespaces = rospy.get_param("~cf_namespaces", ["cf1"])
+        self.map_frame = rospy.get_param("~map_frame", "map")
+        self.cf_waypoint_pubs = {}
+        self.cf_trajectory_pubs = {}
+        for ns in self.cf_namespaces:
+            self.cf_waypoint_pubs[ns] = rospy.Publisher(f'/{ns}/goal', PoseStamped, queue_size=10, latch=True)
+            self.cf_trajectory_pubs[ns] = rospy.Publisher(f'/{ns}/trajectory', Trajectory, queue_size=10, latch=True)
+
+        waypoints = [
+            (0.0, 0.0, 1.0, 0.0),
+            (1.0, 0.0, 1.0, 0.0),
+            (1.0, 1.0, 1.0, 1.5708),
+            (0.0, 1.0, 1.0, 3.1416),
+            (0.0, 0.0, 1.0, 0.0),
+            (1, 1, 1, 0),
+            (2, 4, 2, 0),
+            (2.3, 5.29, 1, 0),
+        ]
+        trajectory = waypoints_to_smooth_trajectory(waypoints, segment_time=2.0)
+    
+        rospy.loginfo("trajectory: "+str(trajectory))
+
+        time.sleep(3)
+        self.publish_trajectory(self.cf_namespaces[0], trajectory)
+
+        # time.sleep(7)
+        # self.send_goal(self.cf_namespaces[0], 1.0, 1.0, 0.0, yaw_deg=180)
+        # self.send_goal(self.cf_namespaces[1], 1.0, -1.0, 0.0, yaw_deg=90)
+        # self.send_goal(self.cf_namespaces[2], -1.0, 1.0, 0.0, yaw_deg=180)
+        # self.send_goal(self.cf_namespaces[3], -1.0, -1.0, 0.0, yaw_deg=90)
+        # time.sleep(10)        
+        # self.send_goal(self.cf_namespaces[0], 3.0, -2.0, 0.0, yaw_deg=270)
+        # self.send_goal(self.cf_namespaces[1], -2.3, 3.95, 0.0, yaw_deg=45)
+        # self.send_goal(self.cf_namespaces[2], -3.0, 2.0, 0.0, yaw_deg=270)
+        # self.send_goal(self.cf_namespaces[3], -2.3, -3.95, 0.0, yaw_deg=45)
+        # time.sleep(10)
+        # self.send_goal(self.cf_namespaces[0], 0.58, 0.58, 0.0, yaw_deg=0)
+        # self.send_goal(self.cf_namespaces[1], 0.58, -0.58, 0.0, yaw_deg=0)
+        # self.send_goal(self.cf_namespaces[2], -0.58, 0.58, 0.0, yaw_deg=0)
+        # self.send_goal(self.cf_namespaces[3], -0.58, -0.58, 0.0, yaw_deg=0)
+        
+    def publish_trajectory(self, ns, cflib_trajectory):
+        if ns not in self.cf_trajectory_pubs:
+            rospy.logwarn(f"No trajectory publisher for namespace '{ns}'")
+            return
+        temp = cflib_trajectory_to_msg(cflib_trajectory)
+        self.cf_trajectory_pubs[ns].publish(temp)
+        rospy.loginfo('Published trajectory with %d pieces to %s',
+                    len(cflib_trajectory), ns)
+
+
+    def send_goal(self, ns, x, y, z, yaw_deg=0.0):
+        if ns not in self.cf_waypoint_pubs:
+            rospy.logwarn(f"No goal publisher for namespace '{ns}'")
+            return
+
+        msg = PoseStamped()
+
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = self.map_frame
+
+        msg.pose.position.x = x
+        msg.pose.position.y = y
+        msg.pose.position.z = z
+
+        yaw_rad = math.radians(yaw_deg)
+        qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, yaw_rad)
+
+        msg.pose.orientation.x = qx
+        msg.pose.orientation.y = qy
+        msg.pose.orientation.z = qz
+        msg.pose.orientation.w = qw
+
+        self.cf_waypoint_pubs[ns].publish(msg)
+
+        rospy.loginfo(
+            f"Sent goal to {ns}: "
+            f"x={x:.2f}, y={y:.2f}, z={z:.2f}"
+        )
+
+def cflib_trajectory_to_msg(cflib_trajectory):
+    """
+    cflib_trajectory: list of cflib.crazyflie.mem.Poly4D objects
+    Returns: a crazyflie_trajectory_msgs/Trajectory message
+    """
+    msg = Trajectory()
+    for piece in cflib_trajectory:
+        p = Poly4D()
+        p.duration = piece.duration
+        p.x = list(piece.x)
+        p.y = list(piece.y)
+        p.z = list(piece.z)
+        p.yaw = list(piece.yaw)
+        msg.pieces.append(p)
+    return msg
+
+
+def main():
+    rospy.init_node('crazyflie_planner')
+    CrazyfliePlanner()
+    rospy.spin()
+
+
+if __name__ == '__main__':
+    main()
