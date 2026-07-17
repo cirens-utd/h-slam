@@ -11,18 +11,23 @@ from geometry_msgs.msg import PoseStamped
 from tf.transformations import quaternion_from_euler
 
 from crazyflies.compute_trajectory import waypoints_to_smooth_trajectory
-from crazyflies.msg import Trajectory, Poly4D
+from crazyflies.reformat_trajectory import cflib_trajectory_to_topic_msg
+from crazyflies.msg import Trajectory
+from std_srvs.srv import Trigger, TriggerRequest
 
 class CrazyfliePlanner:
     def __init__(self):
         self.cf_namespaces = rospy.get_param("~cf_namespaces", ["cf1"])
         self.map_frame = rospy.get_param("~map_frame", "map")
+        self._reset_services = {}
         self.cf_waypoint_pubs = {}
         self.cf_trajectory_pubs = {}
         for ns in self.cf_namespaces:
             self.cf_waypoint_pubs[ns] = rospy.Publisher(f'/{ns}/goal', PoseStamped, queue_size=10, latch=True)
             self.cf_trajectory_pubs[ns] = rospy.Publisher(f'/{ns}/trajectory', Trajectory, queue_size=10, latch=True)
 
+        self.reset_all()
+        rospy.loginfo('all drones reset')
         # waypoints = [
         #     (0.0, 0.0, 0.5, 0.0),
         #     (0.5, 0.25, 0.5, 0.0),
@@ -43,7 +48,6 @@ class CrazyfliePlanner:
     
         rospy.loginfo("trajectory: "+str(trajectory))
 
-        time.sleep(7)
         self.publish_trajectory(self.cf_namespaces[0], trajectory)
         self.publish_trajectory(self.cf_namespaces[1], trajectory)
         self.publish_trajectory(self.cf_namespaces[2], trajectory)
@@ -69,7 +73,7 @@ class CrazyfliePlanner:
         if ns not in self.cf_trajectory_pubs:
             rospy.logwarn(f"No trajectory publisher for namespace '{ns}'")
             return
-        temp = cflib_trajectory_to_msg(cflib_trajectory)
+        temp = cflib_trajectory_to_topic_msg(cflib_trajectory)
         self.cf_trajectory_pubs[ns].publish(temp)
         rospy.loginfo('Published trajectory with %d pieces to %s',
                     len(cflib_trajectory), ns)
@@ -104,22 +108,28 @@ class CrazyfliePlanner:
             f"x={x:.2f}, y={y:.2f}, z={z:.2f}"
         )
 
-def cflib_trajectory_to_msg(cflib_trajectory):
-    """
-    cflib_trajectory: list of cflib.crazyflie.mem.Poly4D objects
-    Returns: a crazyflie_trajectory_msgs/Trajectory message
-    """
-    msg = Trajectory()
-    for piece in cflib_trajectory:
-        p = Poly4D()
-        p.duration = piece.duration
-        p.x = list(piece.x)
-        p.y = list(piece.y)
-        p.z = list(piece.z)
-        p.yaw = list(piece.yaw)
-        msg.pieces.append(p)
-    return msg
+    def _get_reset_service(self, ns):
+        if ns not in self._reset_services:
+            service_name = f'/{ns}/reset'
+            rospy.loginfo(service_name)
+            try:
+                rospy.wait_for_service(service_name, timeout=10.0)
+            except rospy.ROSException as exc:
+                raise RuntimeError(f'Unable to contact HLCommand service at {service_name}: {exc}')
+            self._reset_services[ns] = rospy.ServiceProxy(service_name, Trigger)
+        return self._reset_services[ns]
 
+    def _send_reset_command(self, ns):
+        service = self._get_reset_service(ns)
+        resp = service()
+        if not resp.success:
+            raise RuntimeError(resp.message)
+        return resp
+
+    def reset_all(self):
+        for ns in self.cf_namespaces:
+            rospy.loginfo(f'sending reset command to {ns}')
+            self._send_reset_command(ns)
 
 def main():
     rospy.init_node('crazyflie_planner')

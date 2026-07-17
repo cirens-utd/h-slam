@@ -16,6 +16,7 @@ import tf.transformations as tft
 from geometry_msgs.msg import TransformStamped, PoseStamped
 import atexit
 import signal
+from std_srvs.srv import Trigger, TriggerResponse
 
 
 from crazyflies.crazyflie_controller import CrazyflieController
@@ -38,6 +39,9 @@ class CrazyflieManager(object):
 
         rospy.Subscriber(f'/{self.namespace}/goal', PoseStamped, self._goal_received)
         rospy.Subscriber(f'/{self.namespace}/trajectory', Trajectory, self._trajectory_received)
+
+        rospy.Service(f'/{self.namespace}/reset', Trigger, self.reset)
+
         self.crazyflie_tf = None
         self.takeoff_tf = self._get_original_takeoff()
 
@@ -93,7 +97,7 @@ class CrazyflieManager(object):
     def _trajectory_received(self, msg):
         self._log('loginfo', 'trajectory received')
         self.launch()
-        # self.controller.execute_trajectory(msg)
+        self.controller.execute_trajectory(msg)
         time.sleep(5)
         self.land()
 
@@ -251,6 +255,13 @@ class CrazyflieManager(object):
         self._log('loginfo', f'Relative orientation in crazyflie frame: roll={relative_roll_deg:.1f}°, pitch={relative_pitch_deg:.1f}°, yaw={relative_yaw_deg:.1f}°')
 
         return relative_pos[0], relative_pos[1], relative_pos[2], relative_yaw_deg
+    
+    def reset(self, args):
+        try:
+            self.controller.reset()
+        except:
+            return TriggerResponse(success=False, message=f'Failed to reset {self.namespace}')
+        return TriggerResponse(success=True, message=f'Successfully reset {self.namespace}')
 
 # create a transform from frame_id to child_frame_id
 def _make_transform(frame_id, child_frame_id, x=0.0, y=0.0, z=0.0, yaw=0.0):

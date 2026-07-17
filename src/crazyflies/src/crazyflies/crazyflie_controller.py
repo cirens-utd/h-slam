@@ -3,7 +3,6 @@ import math
 import time
 import rospy
 
-import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.crazyflie.high_level_commander import HighLevelCommander
@@ -100,9 +99,9 @@ class CrazyflieController:
             return
 
         self._launched = True
-        self._log('loginfo', 'starting reset')
-        self._send_hl_command('reset_estimation')
-        self._log('loginfo', 'reset complete')
+        # No longer need to reset because all crazyflies are reset in sync before launching by crazyflie_planner
+        # self.reset()
+        
         if velocity is None:
             velocity = self.default_velocity
         if height is None:
@@ -181,6 +180,9 @@ class CrazyflieController:
 
     def start_trajectory(self, trajectory_id):
         self._send_hl_command('start_trajectory', [trajectory_id, 1])
+
+    def reset(self):
+        self._send_hl_command('reset_estimation')
 
     def get_position_estimate(self):
         return self.position_estimate

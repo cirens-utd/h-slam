@@ -4,10 +4,11 @@
 # of the planner sending the message to the manager and the manager making a service call to the radio bridge.
 
 from cflib.crazyflie.mem import Poly4D as CFPoly4D
+from crazyflies.msg import Trajectory, Poly4D
 
 FLOATS_PER_PIECE = 33  # 1 duration + 4 axes * 8 coefficients
 
-def trajectory_topic_msg_to_1D_array(trajectory_msg):
+def trajectory_topic_msg_to_array(trajectory_msg):
     """
     trajectory_msg: a crazyflie_trajectory_msgs/Trajectory message
     Returns: a flat list of floats, 33 per piece, in piece order.
@@ -45,6 +46,21 @@ def array_to_cflib_trajectory(array):
  
     return trajectory
 
+def cflib_trajectory_to_topic_msg(cflib_trajectory):
+    """
+    cflib_trajectory: list of cflib.crazyflie.mem.Poly4D objects
+    Returns: a crazyflie_trajectory_msgs/Trajectory message
+    """
+    msg = Trajectory()
+    for piece in cflib_trajectory:
+        p = Poly4D()
+        p.duration = piece.duration
+        p.x = list(piece.x)
+        p.y = list(piece.y)
+        p.z = list(piece.z)
+        p.yaw = list(piece.yaw)
+        msg.pieces.append(p)
+    return msg
 
 def _as_poly(coeffs):
     """
