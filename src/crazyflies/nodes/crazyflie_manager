@@ -93,7 +93,8 @@ class CrazyflieManager(object):
     def _trajectory_received(self, msg):
         self._log('loginfo', 'trajectory received')
         self.launch()
-        self.controller.execute_trajectory(msg)
+        # self.controller.execute_trajectory(msg)
+        time.sleep(5)
         self.land()
 
     def launch(self):
@@ -104,7 +105,7 @@ class CrazyflieManager(object):
             self.takeoff_tf = self.crazyflie_tf
             self.takeoff_tf.child_frame_id = self.base_frame
 
-        self._log('loginfo', 'takeoff tf: ' + str(self.takeoff_tf))
+        # self._log('loginfo', 'takeoff tf: ' + str(self.takeoff_tf))
 
         self.controller.launch(velocity=0.75)
 
@@ -139,20 +140,6 @@ class CrazyflieManager(object):
                 pass
             self.controller = None
 
-    # custom sleep function so that we can always keybaord interrupt
-    # and safely land the crazyflie if something goes wrong
-    # not currently used
-    def _interruptible_sleep(self, duration, check_period=0.1):
-        end_time = time.time() + duration
-        try:
-            while time.time() < end_time:
-                if rospy.is_shutdown():
-                    raise rospy.ROSInterruptException()
-                remaining = end_time - time.time()
-                time.sleep(min(check_period, remaining))
-        except KeyboardInterrupt:
-            self._log('loginfo', 'KeyboardInterrupt received during sleep')
-            raise
 
     # compute and broadcast map -> crazyflie
     # from takeoff position and current crazyflie position
@@ -161,6 +148,7 @@ class CrazyflieManager(object):
             return
         if not child_frame_id:
             child_frame_id = self.namespace
+
         # get current crazyflie pose from the controller
         cf_pose = self.controller.get_position_estimate()
         cf_roll, cf_pitch, cf_yaw = map(math.radians, cf_pose[3:6])
@@ -201,7 +189,6 @@ class CrazyflieManager(object):
 
         self.crazyflie_transform_publisher.sendTransform(tf_msg)
         self.crazyflie_tf = tf_msg
-        # print("new tf: "+str(tf_msg))
         return tf_msg
 
     # move to position in map frame
@@ -215,7 +202,6 @@ class CrazyflieManager(object):
         # move crazyflie to relative position
         self._log('loginfo', f'Moving {dx} {dy} {dz} (yaw: {dyaw}) to reach absolute position {goal_pose.position.x} {goal_pose.position.y} {self.crazyflie_tf.transform.translation.z}')
         self.controller.move(dx, dy, 0, yaw=dyaw)
-        # self.controller.move_arc(dx, dy, 0, yaw=dyaw)
 
     # translate given pose in map frame to relative movement in crazyflie frame using tf
     def _translate_absolute_map_to_relative_crazyflie(self, goal_pose):

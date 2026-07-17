@@ -23,22 +23,31 @@ class CrazyfliePlanner:
             self.cf_waypoint_pubs[ns] = rospy.Publisher(f'/{ns}/goal', PoseStamped, queue_size=10, latch=True)
             self.cf_trajectory_pubs[ns] = rospy.Publisher(f'/{ns}/trajectory', Trajectory, queue_size=10, latch=True)
 
+        # waypoints = [
+        #     (0.0, 0.0, 0.5, 0.0),
+        #     (0.5, 0.25, 0.5, 0.0),
+        #     (1, 1, 0.5, 0),
+        #     (1.5, 2.25, 0.5, .4242),
+        #     (1, 1, 0.5, 1.7),
+        #     (0, 0, 0.5, 0),
+        # ]
+
         waypoints = [
-            (0.0, 0.0, 1.0, 0.0),
-            (1.0, 0.0, 1.0, 0.0),
-            (1.0, 1.0, 1.0, 1.5708),
-            (0.0, 1.0, 1.0, 3.1416),
-            (0.0, 0.0, 1.0, 0.0),
-            (1, 1, 1, 0),
-            (2, 4, 2, 0),
-            (2.3, 5.29, 1, 0),
+            (0.0, 0.0, 0.5, 0.0),
+            (0, 1, 0.5, 0.0),
+            (1, 1, 0.5, 0),
+            (1, 0, 0.5, .0),
+            (0.0, 0.0, 0.5, 0.0),
         ]
         trajectory = waypoints_to_smooth_trajectory(waypoints, segment_time=2.0)
     
         rospy.loginfo("trajectory: "+str(trajectory))
 
-        time.sleep(3)
+        time.sleep(7)
         self.publish_trajectory(self.cf_namespaces[0], trajectory)
+        self.publish_trajectory(self.cf_namespaces[1], trajectory)
+        self.publish_trajectory(self.cf_namespaces[2], trajectory)
+        self.publish_trajectory(self.cf_namespaces[3], trajectory)
 
         # time.sleep(7)
         # self.send_goal(self.cf_namespaces[0], 1.0, 1.0, 0.0, yaw_deg=180)

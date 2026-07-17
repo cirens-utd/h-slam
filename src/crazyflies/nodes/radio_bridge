@@ -9,10 +9,12 @@ import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.crazyflie.log import LogConfig
-from cflib.crazyflie.mem import MemoryElement, Poly4D as CFPoly4D
+from cflib.crazyflie.mem import MemoryElement
 
 from crazyflies.srv import HLCommand, HLCommandResponse
 from crazyflies.msg import StateEstimate
+from crazyflies.reformat_trajectory import array_to_cflib_trajectory
+
 class RadioBridge:
     def __init__(self):
         self.uris = rospy.get_param('~uris', {'cf1': 'radio://0/100/2M/E7E7E7E702'})
@@ -29,7 +31,10 @@ class RadioBridge:
         for ns, uri in self.uris.items():
             cf = Crazyflie(rw_cache=f'./cache/{ns}')
             scf = SyncCrazyflie(uri, cf=cf)
-            scf.open_link()
+            try:
+                scf.open_link()
+            except Exception: 
+                raise RuntimeError(f'{ns} can not connect.')
             self.cfs[ns] = scf
             
             self.state_pubs[ns] = rospy.Publisher(f'/{ns}/state', StateEstimate, queue_size=10)
@@ -69,6 +74,7 @@ class RadioBridge:
 
     def handle_command(self, ns, req):
         hlc = self.cfs[ns].cf.high_level_commander
+        rospy.loginfo(f'command received {ns}: {req}')
         try:
             if req.command == "takeoff":
                 # args: [height, duration]
@@ -91,7 +97,12 @@ class RadioBridge:
                 # args: [trajectory_id, cf_trajectory]
                 self.define_trajectory(int(req.args[0]), array_to_cflib_trajectory(req.args[1:]), ns)
             elif req.command == "start_trajectory":
-                # args [trajectory_id, relative_position(0/1), relative_yaw(0/1)]
+                # args [trajectory_id, relative(0/1)]
+
+                # WARNING: local crazyflie-lib-python is out of date (1.20.1 vs 1.32). This command takes relative_position and 
+                # relative_yaw in the current version. Do not want to update the library in case it breaks something else and 
+                # we will always have relative position and yaw tied together anyway so its ok.
+
                 hlc.start_trajectory(int(req.args[0]), relative=bool(req.args[1]))
             else:
                 return HLCommandResponse(success=False, message=f"Unknown command: {req.command}")
@@ -101,9 +112,9 @@ class RadioBridge:
                 
     def _reset_position_estimator(self, hlc):
         hlc._cf.param.set_value('kalman.resetEstimation', '1')
-        time.sleep(0.1)
+        rospy.sleep(0.1)
         hlc._cf.param.set_value('kalman.resetEstimation', '0')
-        time.sleep(2)
+        # rospy.sleep(2)
 
     def _sigterm_handler(self, signum, frame):
         rospy.logwarn("SIGTERM received, emergency stopping Crazyflies")
@@ -178,41 +189,6 @@ class RadioBridge:
         self.state_pubs.clear()
 
         rospy.loginfo("Radio bridge shutdown complete")
-
-FLOATS_PER_PIECE = 33  # 1 duration + 4 axes * 8 coefficients
-
-def array_to_cflib_trajectory(array):
-    """
-    array: flat list/array of floats produced by trajectory_msg_to_array
-           (length must be a multiple of 33)
-    Returns: a list of cflib.crazyflie.mem.Poly4D objects, ready to assign
-             to trajectory_mem.trajectory before write_data_sync().
-    """
-    if len(array) % FLOATS_PER_PIECE != 0:
-        raise ValueError(
-            f'Array length {len(array)} is not a multiple of '
-            f'{FLOATS_PER_PIECE} (1 duration + 4x8 coefficients per piece)')
- 
-    trajectory = []
-    for start in range(0, len(array), FLOATS_PER_PIECE):
-        duration = array[start]
-        x = list(array[start + 1: start + 9])
-        y = list(array[start + 9: start + 17])
-        z = list(array[start + 17: start + 25])
-        yaw = list(array[start + 25: start + 33])
-        trajectory.append(CFPoly4D(duration, _as_poly(x), _as_poly(y), _as_poly(z), _as_poly(yaw)))
- 
-    return trajectory
-
-
-def _as_poly(coeffs):
-    """
-    Wrap a list of 8 coefficients in cflib's Poly4D.Poly, which is what
-    Poly4D.x / .y / .z / .yaw actually need to be (each must expose a
-    `.values` attribute -- a plain list is NOT accepted here, even though
-    it looks like it should be).
-    """
-    return CFPoly4D.Poly(list(coeffs))
 
 
 def main():
